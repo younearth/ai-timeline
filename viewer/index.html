@@ -1,7 +1,434 @@
 <!doctype html>
-<!-- viewer/index.html — file://로 열리는 타임라인 뷰어 -->
-<!-- 구현 단계: 1단계 (타임라인 + Q&A 탭) -->
+<!-- viewer/index.html — file://로 열리는 타임라인 뷰어 (빌드: node build.js) -->
 <html lang="ko">
-<head><meta charset="utf-8"><title>AI Timeline</title></head>
-<body></body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Timeline</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb; --soft: #f1f3f6;
+    --accent: #2f6fde; --done: #1f8a4c; --doing: #b7791f; --hold: #7c3aed;
+    --bad: #d93025; --bad-bg: #fdecea; --pend-bg: #fff8e6; --pend-line: #f0d9a0;
+    --hm0: #ebedf0; --hm1: #9be9a8; --hm2: #40c463; --hm3: #30a14e; --hm4: #216e39;
+    --tag-l: 93%; --tag-tl: 32%;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --card: #1c2027; --text: #e6e8eb; --muted: #9aa3ae; --line: #2c323b; --soft: #252a33;
+      --accent: #6c9cf0; --done: #4cc38a; --doing: #e0a84a; --hold: #a78bfa;
+      --bad: #ff6b60; --bad-bg: #3a1d1b; --pend-bg: #2e2717; --pend-line: #5a4a22;
+      --hm0: #262c35; --hm1: #0e4429; --hm2: #006d32; --hm3: #26a641; --hm4: #39d353;
+      --tag-l: 24%; --tag-tl: 80%;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  button { font: inherit; color: inherit; }
+  a { color: var(--accent); }
+
+  header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1240px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; }
+  .tabs button { border: 0; background: none; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+  .tabs button.on { color: var(--text); background: var(--soft); font-weight: 600; }
+  #q { margin-left: auto; width: 260px; font: inherit; color: var(--text); background: var(--bg);
+       border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+
+  .layout { max-width: 1240px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+  aside { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 12px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .panel h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .panel h3 .grow { flex: 1; }
+  .iconbtn { border: 1px solid var(--line); background: var(--card); border-radius: 6px; width: 24px; height: 22px; cursor: pointer; line-height: 1; padding: 0; color: var(--muted); }
+  .iconbtn:disabled { opacity: .35; cursor: default; }
+
+  /* 활동 히트맵 */
+  .hm { display: grid; grid-template-columns: 14px repeat(16, 12px); grid-auto-rows: 12px; gap: 3px; font-size: 10px; color: var(--muted); }
+  .hm .mon { grid-row: 1; white-space: nowrap; overflow: visible; line-height: 12px; }
+  .hm .wd { grid-column: 1; line-height: 12px; }
+  .hm .cell { border-radius: 3px; background: var(--hm0); border: 0; padding: 0; cursor: pointer; outline-offset: 1px; }
+  .hm .cell.l1 { background: var(--hm1); } .hm .cell.l2 { background: var(--hm2); }
+  .hm .cell.l3 { background: var(--hm3); } .hm .cell.l4 { background: var(--hm4); }
+  .hm .cell.future { visibility: hidden; }
+  .hm .cell.today { box-shadow: inset 0 0 0 1px var(--muted); }
+  .hm .cell.sel { outline: 2px solid var(--accent); }
+  .hm-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .legend { display: flex; gap: 3px; align-items: center; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* 필터 목록 */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 12px; }
+  .chip.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600; }
+  .chip.bad.on { border-color: var(--bad); color: var(--bad); background: var(--bad-bg); }
+  .facet { list-style: none; margin: 0; padding: 0; }
+  .facet button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 5px 6px; border-radius: 6px; cursor: pointer; text-align: left; }
+  .facet button:hover { background: var(--soft); }
+  .facet button.on { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  .facet button.zero { opacity: .45; }
+  .facet .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .facet .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: hsl(var(--h) 60% 50%); }
+  .reset { border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
+
+  /* 본문 */
+  main { min-width: 0; }
+  .active { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
+  .active .chip { cursor: pointer; }
+  .empty { color: var(--muted); padding: 48px 0; text-align: center; }
+  h2.day { font-size: 13px; color: var(--muted); font-weight: 600; margin: 18px 0 8px; display: flex; gap: 8px; align-items: baseline; }
+  h2.day:first-of-type { margin-top: 0; }
+  h2.day .n { font-weight: 400; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
+  .card.bad { border-left: 4px solid var(--bad); }
+  .card:target { outline: 2px solid var(--accent); }
+  .head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; color: var(--muted); }
+  .proj { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 6px;
+          background: hsl(var(--h) 65% var(--tag-l)); color: hsl(var(--h) 60% var(--tag-tl)); cursor: pointer; border: 0; }
+  .badge { font-size: 12px; font-weight: 600; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .s-완료 { color: var(--done); } .s-진행중 { color: var(--doing); } .s-보류 { color: var(--hold); }
+  .cat { font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--soft); color: var(--muted); border: 0; cursor: pointer; }
+  .cat.guess { font-style: italic; }
+  .warn { color: var(--bad); font-weight: 600; }
+  .time { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .title { font-size: 15px; font-weight: 650; margin: 6px 0 2px; word-break: break-word; }
+  .summary { margin: 0 0 4px; color: var(--text); opacity: .85; word-break: break-word; }
+  .cont { font-size: 12px; color: var(--muted); }
+  .pending { margin: 8px 0 4px; padding: 8px 12px; border-radius: 8px; background: var(--pend-bg); border: 1px solid var(--pend-line); font-size: 13px; }
+  .pending ul { margin: 2px 0 0; padding-left: 18px; }
+  .more { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+  details { width: 100%; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; display: inline-flex; gap: 4px; align-items: center; user-select: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; border-right: 0; transition: transform .15s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > summary .warn { font-size: 12px; }
+  .raw { margin-top: 6px; padding: 10px 12px; background: var(--soft); border-radius: 8px; white-space: pre-wrap; word-break: break-word; font-size: 13px; max-height: 360px; overflow: auto; }
+  .ids { color: var(--muted); font-size: 11px; margin-top: 6px; }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td.c, th.c { text-align: center; width: 70px; }
+  td code { background: var(--soft); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+  tr.miss td { color: var(--bad); background: var(--bad-bg); font-weight: 600; }
+  tr.miss td code { background: transparent; }
+
+  .qa { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
+  .qa .q { font-weight: 600; }
+  .qa .q::before { content: "Q. "; color: var(--accent); }
+  .qa .a { margin-top: 4px; white-space: pre-wrap; }
+  .qa .a::before { content: "A. "; color: var(--muted); font-weight: 600; }
+  .qa .src { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .card .qa { border: 0; background: var(--soft); padding: 8px 12px; margin: 6px 0 0; }
+  mark { background: #ffe58a; color: #1d2330; border-radius: 2px; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    aside { position: static; max-height: none; overflow: visible; }
+    #q { width: 100%; margin-left: 0; }
+    .time { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>AI Timeline</h1>
+    <nav class="tabs">
+      <button data-tab="timeline" class="on">타임라인</button>
+      <button data-tab="qna">Q&amp;A</button>
+    </nav>
+    <input type="search" id="q" placeholder="검색 (제목·요청·요약·파일·Q&A)">
+  </div>
+</header>
+<div class="layout">
+  <aside id="side"></aside>
+  <main id="main"></main>
+</div>
+
+<script src="timeline-data.js"></script>
+<script>
+(function () {
+  const data = window.TIMELINE_DATA;
+  const side = document.getElementById('side');
+  const main = document.getElementById('main');
+  if (!data) {
+    main.innerHTML = '<p class="empty">timeline-data.js가 없습니다. 저장소 루트에서 <code>node build.js</code>를 실행하세요.</p>';
+    return;
+  }
+
+  const WEEKS = 16;
+  const STATUSES = ['완료', '진행중', '보류'];
+  const CATEGORY_LABELS = {
+    ui: 'UI·화면', api: 'API·로직', db: 'DB', data: '데이터', infra: '인프라·배포',
+    config: '설정', docs: '문서', test: '테스트', qa: '질의·조사', etc: '기타',
+  };
+  const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+  // ── 유틸 ─────────────────────────────────────────────
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const p2 = (n) => String(n).padStart(2, '0');
+  const dayKey = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const parse = (iso) => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d : null; };
+  const hm = (d) => (d ? `${p2(d.getHours())}:${p2(d.getMinutes())}` : '');
+  const dayLabel = (key) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return `${y}년 ${m}월 ${d}일 (${WEEKDAYS[new Date(y, m - 1, d).getDay()]})`;
+  };
+  const duration = (a, b) => {
+    if (!a || !b) return '';
+    const m = Math.round((b - a) / 60000);
+    if (!(m >= 0)) return '';
+    return m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간 ${m % 60}분`;
+  };
+  // 프로젝트 이름 → 색상. 황금각으로 퍼뜨려 비슷한 이름도 색이 갈리게 한다.
+  const hue = (s) => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.codePointAt(0), 16777619) >>> 0; return Math.round((h % 1000) * 137.508) % 360; };
+  const catLabel = (c) => CATEGORY_LABELS[c] || c;
+
+  // ── 데이터 준비 ───────────────────────────────────────
+  const tasks = (data.tasks || []).map((t) => {
+    const req = parse(t.requestedAt);
+    return {
+      ...t,
+      _req: req,
+      _done: parse(t.completedAt),
+      _day: req ? dayKey(req) : '',
+      _hay: [t.title, t.request, t.summary, t.response, t.project, t.id, ...t.files.reportedByAI, ...t.files.detectedByGit,
+        ...t.pendingForUser, ...t.qna.flatMap((x) => [x.q, x.a])].join('\n').toLowerCase(),
+    };
+  });
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const allProjects = [...new Set(tasks.map((t) => t.project).filter(Boolean))].sort();
+  const allCats = Object.keys(CATEGORY_LABELS).filter((c) => tasks.some((t) => t.categories.includes(c)))
+    .concat([...new Set(tasks.flatMap((t) => t.categories))].filter((c) => !(c in CATEGORY_LABELS)));
+
+  const ui = { tab: 'timeline', q: '', day: '', projects: new Set(), cats: new Set(), status: '', onlyBad: false, hmPage: 0 };
+
+  const hl = (s) => {
+    const text = esc(s);
+    if (!ui.q) return text;
+    const needle = esc(ui.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return text.replace(new RegExp(needle, 'gi'), (m) => `<mark>${m}</mark>`);
+  };
+
+  // except: 패싯 개수를 셀 때 자기 자신의 필터는 빼고 계산한다.
+  function matches(t, except) {
+    if (except !== 'day' && ui.day && t._day !== ui.day) return false;
+    if (except !== 'projects' && ui.projects.size && !ui.projects.has(t.project)) return false;
+    if (except !== 'cats' && ui.cats.size && !t.categories.some((c) => ui.cats.has(c))) return false;
+    if (except !== 'status' && ui.status && t.status !== ui.status) return false;
+    if (except !== 'bad' && ui.onlyBad && !t.hasMismatch) return false;
+    if (ui.q && !t._hay.includes(ui.q.toLowerCase())) return false;
+    return true;
+  }
+  const filtered = (except) => tasks.filter((t) => matches(t, except));
+  const anyFilter = () => ui.day || ui.projects.size || ui.cats.size || ui.status || ui.onlyBad || ui.q;
+
+  // ── 사이드바 ─────────────────────────────────────────
+  function heatmap() {
+    const counts = {};
+    for (const t of filtered('day')) if (t._day) counts[t._day] = (counts[t._day] || 0) + 1;
+
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const latest = tasks.reduce((m, t) => (t._req && t._req > m ? t._req : m), today);
+    const anchor = new Date(latest); anchor.setHours(0, 0, 0, 0);
+    const end = new Date(anchor); end.setDate(end.getDate() + (6 - end.getDay()) - ui.hmPage * WEEKS * 7);
+    const start = new Date(end); start.setDate(start.getDate() - WEEKS * 7 + 1);
+    const earliest = tasks.reduce((m, t) => (t._req && t._req < m ? t._req : m), today);
+
+    const max = Math.max(1, ...Object.values(counts));
+    const level = (n) => (n ? Math.min(4, Math.ceil((n / max) * 4)) : 0);
+    let cells = '', months = '', total = 0, lastMonth = -1;
+    for (let w = 0; w < WEEKS; w++) {
+      for (let d = 0; d < 7; d++) {
+        const day = new Date(start); day.setDate(start.getDate() + w * 7 + d);
+        const key = dayKey(day);
+        const n = counts[key] || 0;
+        total += n;
+        if (d === 0 && day.getMonth() !== lastMonth) {
+          lastMonth = day.getMonth();
+          if (w < WEEKS - 1) months += `<span class="mon" style="grid-column:${w + 2}">${day.getMonth() + 1}월</span>`;
+        }
+        const cls = ['cell', `l${level(n)}`, day > anchor && day > today ? 'future' : '', key === dayKey(today) ? 'today' : '', key === ui.day ? 'sel' : ''].join(' ');
+        cells += `<button class="${cls}" style="grid-column:${w + 2};grid-row:${d + 2}" data-day="${key}" title="${key} · 작업 ${n}건" aria-label="${key} 작업 ${n}건"></button>`;
+      }
+    }
+    const wd = [1, 3, 5].map((d) => `<span class="wd" style="grid-row:${d + 2}">${WEEKDAYS[d]}</span>`).join('');
+    const range = `${start.getFullYear()}.${p2(start.getMonth() + 1)} – ${end.getFullYear()}.${p2(end.getMonth() + 1)}`;
+    return `<section class="panel">
+      <h3><span class="grow">활동 · ${range}</span>
+        <button class="iconbtn" data-hm="prev" ${start <= earliest ? 'disabled' : ''} aria-label="이전 기간">‹</button>
+        <button class="iconbtn" data-hm="next" ${ui.hmPage === 0 ? 'disabled' : ''} aria-label="다음 기간">›</button></h3>
+      <div class="hm">${months}${wd}${cells}</div>
+      <div class="hm-foot"><span>${WEEKS}주간 작업 ${total}건</span>
+        <span class="legend">적음 <i style="background:var(--hm0)"></i><i style="background:var(--hm1)"></i><i style="background:var(--hm2)"></i><i style="background:var(--hm3)"></i><i style="background:var(--hm4)"></i> 많음</span></div>
+    </section>`;
+  }
+
+  function facet(title, key, values, labelFn, extra) {
+    const set = ui[key];
+    const pool = filtered(key);
+    const count = (v) => pool.filter((t) => (key === 'projects' ? t.project === v : t.categories.includes(v))).length;
+    const items = values.map((v) => {
+      const n = count(v);
+      return `<li><button class="${set.has(v) ? 'on' : ''} ${n ? '' : 'zero'}" data-facet="${key}" data-v="${esc(v)}">
+        ${extra ? extra(v) : ''}<span class="name">${esc(labelFn(v))}</span><span class="n">${n}</span></button></li>`;
+    }).join('');
+    return `<section class="panel"><h3><span class="grow">${title}</span>${set.size ? `<button class="reset" data-clear="${key}">전체</button>` : ''}</h3>
+      <ul class="facet">${items || '<li class="muted">없음</li>'}</ul></section>`;
+  }
+
+  function statusPanel() {
+    const pool = filtered('status');
+    const chips = ['', ...STATUSES].map((s) => {
+      const n = s ? pool.filter((t) => t.status === s).length : pool.length;
+      return `<button class="chip ${ui.status === s ? 'on' : ''}" data-status="${s}">${s || '전체'} ${n}</button>`;
+    }).join('');
+    const bad = filtered('bad').filter((t) => t.hasMismatch).length;
+    return `<section class="panel"><h3>상태</h3><div class="chips">${chips}
+      <button class="chip bad ${ui.onlyBad ? 'on' : ''}" data-bad="1">불일치 ${bad}</button></div></section>`;
+  }
+
+  function renderSide() {
+    side.innerHTML = heatmap() + statusPanel() +
+      facet('프로젝트', 'projects', allProjects, (v) => v, (v) => `<span class="dot" style="--h:${hue(v)}"></span>`) +
+      facet('작업 분류', 'cats', allCats, catLabel);
+  }
+
+  // ── 본문 ─────────────────────────────────────────────
+  function activeBar(n, unit) {
+    const chips = [];
+    if (ui.day) chips.push(`<button class="chip on" data-clear="day">${esc(dayLabel(ui.day))} ✕</button>`);
+    ui.projects.forEach((p) => chips.push(`<button class="chip on" data-facet="projects" data-v="${esc(p)}">${esc(p)} ✕</button>`));
+    ui.cats.forEach((c) => chips.push(`<button class="chip on" data-facet="cats" data-v="${esc(c)}">${esc(catLabel(c))} ✕</button>`));
+    if (ui.status) chips.push(`<button class="chip on" data-status="">${ui.status} ✕</button>`);
+    if (ui.onlyBad) chips.push(`<button class="chip bad on" data-bad="1">불일치만 ✕</button>`);
+    return `<div class="active"><span>${unit} ${n}건</span>${chips.join('')}
+      ${anyFilter() ? '<button class="reset" data-clear="all">필터 모두 해제</button>' : ''}
+      <span style="margin-left:auto">빌드 ${esc(hm(parse(data.generatedAt)))}</span></div>`;
+  }
+
+  function filesTable(t) {
+    const ai = new Set(t.files.reportedByAI), git = new Set(t.files.detectedByGit), tool = new Set(t.files.touchedByTool || []);
+    const change = Object.fromEntries((t.gitChanges || []).map((c) => [c.path, c.change]));
+    const all = [...new Set([...ai, ...git, ...tool])].sort();
+    if (!all.length) return '<p class="cont">변경 파일 없음</p>';
+    const onlyAI = new Set(t.mismatch.onlyAI), onlyGit = new Set(t.mismatch.onlyGit);
+    const hasTool = tool.size > 0;
+    const rows = all.map((f) => {
+      const note = onlyAI.has(f) ? 'AI만 보고' : onlyGit.has(f) ? 'AI 보고 누락' : '';
+      return `<tr class="${note ? 'miss' : ''}">
+        <td><code>${hl(f)}</code>${change[f] ? ` <span class="cont">${change[f]}</span>` : ''}${note ? ` · ${note}` : ''}</td>
+        <td class="c">${ai.has(f) ? '✓' : '—'}</td><td class="c">${git.has(f) ? '✓' : '—'}</td>
+        ${hasTool ? `<td class="c">${tool.has(f) ? '✓' : ''}</td>` : ''}</tr>`;
+    }).join('');
+    return `<table><thead><tr><th>파일</th><th class="c">AI 보고</th><th class="c">Git 감지</th>${hasTool ? '<th class="c">편집 도구</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function card(t) {
+    const prev = t.continues ? byId.get(t.continues) : null;
+    const nMiss = t.mismatch.onlyAI.length + t.mismatch.onlyGit.length;
+    const flags = [];
+    if (!t.reported) flags.push('<span class="warn">AI 보고 없음</span>');
+    if (t.reportError) flags.push('<span class="warn">보고 형식 오류</span>');
+    const nFiles = new Set([...t.files.reportedByAI, ...t.files.detectedByGit, ...(t.files.touchedByTool || [])]).size;
+    const time = t._req ? `${hm(t._req)}${t._done ? ` → ${hm(t._done)} · ${duration(t._req, t._done)}` : ''}` : '';
+    const cats = t.categories.map((c) => `<button class="cat ${t.categoriesInferred ? 'guess' : ''}" data-facet="cats" data-v="${esc(c)}"
+      title="${t.categoriesInferred ? '변경 파일로 추정한 분류' : 'AI가 보고한 분류'}">${esc(catLabel(c))}</button>`).join('');
+    const sameAsTitle = t.request.trim() === t.title.trim();
+    return `<article class="card ${t.hasMismatch ? 'bad' : ''}" id="${esc(t.id)}">
+      <div class="head">
+        <button class="proj" style="--h:${hue(t.project)}" data-facet="projects" data-v="${esc(t.project)}">${esc(t.project)}</button>
+        <span class="badge s-${esc(t.status)}">${esc(t.status)}</span>${cats}${flags.join('')}
+        <span class="time">${time} · ${esc(t.device)}</span>
+      </div>
+      <div class="title">${hl(t.title)}</div>
+      ${t.summary ? `<div class="summary">${hl(t.summary)}</div>` : ''}
+      ${prev || t.continues ? `<div class="cont">↳ 이어서: <a href="#${esc(t.continues)}">${prev ? esc(prev.title) : esc(t.continues)}</a></div>` : ''}
+      ${t.pendingForUser.length ? `<div class="pending"><b>사용자 처리 필요</b><ul>${t.pendingForUser.map((p) => `<li>${hl(p)}</li>`).join('')}</ul></div>` : ''}
+      <div class="more">
+        ${t.request && !sameAsTitle ? `<details><summary>요청 원문</summary><div class="raw">${hl(t.request)}</div></details>` : ''}
+        ${t.response ? `<details><summary>AI 응답</summary><div class="raw">${hl(t.response)}</div></details>` : ''}
+        ${nFiles ? `<details ${t.hasMismatch ? 'open' : ''}><summary>변경 파일 ${nFiles}개${nMiss ? ` <span class="warn">· 불일치 ${nMiss}</span>` : ''}</summary>${filesTable(t)}</details>` : ''}
+        ${t.qna.length ? `<details><summary>Q&amp;A ${t.qna.length}건</summary>${t.qna.map((x) => `<div class="qa"><div class="q">${hl(x.q)}</div><div class="a">${hl(x.a)}</div></div>`).join('')}</details>` : ''}
+      </div>
+      <div class="ids">${esc(t.agent)} · ${esc(t.id)}</div>
+    </article>`;
+  }
+
+  function groupByDay(list, render) {
+    let html = '', current = null, buf = [];
+    const flush = () => { if (current !== null) html += `<h2 class="day">${current ? esc(dayLabel(current)) : '날짜 없음'} <span class="n">${buf.length}건</span></h2>` + buf.map(render).join(''); };
+    for (const item of list) {
+      const key = item.t ? item.t._day : item._day;
+      if (key !== current) { flush(); current = key; buf = []; }
+      buf.push(item);
+    }
+    flush();
+    return html;
+  }
+
+  function renderMain() {
+    const list = filtered();
+    if (ui.tab === 'timeline') {
+      main.innerHTML = activeBar(list.length, '작업') +
+        (list.length ? groupByDay(list, card) : '<p class="empty">조건에 맞는 작업이 없습니다.</p>');
+    } else {
+      const items = list.flatMap((t) => t.qna.map((x) => ({ ...x, t })));
+      main.innerHTML = activeBar(items.length, 'Q&amp;A') + (items.length
+        ? groupByDay(items, (x) => `<div class="qa"><div class="q">${hl(x.q)}</div><div class="a">${hl(x.a)}</div>
+            <div class="src"><button class="proj" style="--h:${hue(x.t.project)}" data-facet="projects" data-v="${esc(x.t.project)}">${esc(x.t.project)}</button>
+            ${esc(hm(x.t._req))} · <a href="#${esc(x.t.id)}" data-goto="${esc(x.t.id)}">${esc(x.t.title)}</a></div></div>`)
+        : '<p class="empty">조건에 맞는 Q&amp;A가 없습니다.</p>');
+    }
+  }
+
+  function render() { renderSide(); renderMain(); }
+
+  function setTab(tab) {
+    ui.tab = tab;
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+    render();
+  }
+
+  // ── 이벤트 ───────────────────────────────────────────
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  document.getElementById('q').addEventListener('input', (e) => { ui.q = e.target.value.trim(); render(); });
+
+  function onClick(e) {
+    const el = e.target.closest('button, a[data-goto]');
+    if (!el) return;
+    const ds = el.dataset;
+    if (ds.goto) {
+      e.preventDefault();
+      setTab('timeline');
+      location.hash = ds.goto;
+      const target = document.getElementById(ds.goto);
+      if (target) target.scrollIntoView({ block: 'start' });
+      return;
+    }
+    if (ds.day !== undefined) ui.day = ui.day === ds.day ? '' : ds.day;
+    else if (ds.hm) ui.hmPage = Math.max(0, ui.hmPage + (ds.hm === 'prev' ? 1 : -1));
+    else if (ds.facet) { const s = ui[ds.facet]; s.has(ds.v) ? s.delete(ds.v) : s.add(ds.v); }
+    else if (ds.status !== undefined) ui.status = ui.status === ds.status ? '' : ds.status;
+    else if (ds.bad) ui.onlyBad = !ui.onlyBad;
+    else if (ds.clear === 'all') {
+      Object.assign(ui, { day: '', status: '', onlyBad: false, q: '' });
+      ui.projects.clear(); ui.cats.clear();
+      document.getElementById('q').value = '';
+    } else if (ds.clear === 'day') ui.day = '';
+    else if (ds.clear) ui[ds.clear].clear();
+    else return;
+    render();
+  }
+  side.addEventListener('click', onClick);
+  main.addEventListener('click', onClick);
+  render();
+})();
+</script>
+</body>
 </html>
