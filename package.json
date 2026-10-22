@@ -3,9 +3,13 @@
   "version": "0.0.1",
   "description": "AI 코딩 작업을 요청→구현→결과 단위로 기록하는 타임라인 도구",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "build:example": "node build.js examples/sample.jsonl",
+    "install-hooks": "node scripts/install.js"
   },
   "license": "MIT"
 }
