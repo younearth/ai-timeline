@@ -1,0 +1,19 @@
+# 의존성·OS
+node_modules/
+.DS_Store
+
+# 실제 작업 기록은 이 저장소에 절대 올리지 않음
+data/
+*.jsonl
+!examples/*.jsonl
+
+# 빌드 산출물
+timeline-data.js
+!examples/timeline-data.js
+
+# 기기별 설정·비밀값
+config.json
+.env
+.env.*
+*.pem
+*.key
